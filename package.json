@@ -1,0 +1,13 @@
+{
+  "name": "randclip",
+  "version": "0.1.0",
+  "description": "Download random segments of YouTube videos for sampling, editing, datasets and anything else that needs many short clips.",
+  "keywords": ["youtube", "video", "clips", "random", "yt-dlp", "ffmpeg", "sampling"],
+  "license": "MIT",
+  "author": "morizmatik",
+  "main": "src/index.js",
+  "bin": { "randclip": "bin/randclip" },
+  "files": ["bin", "src", "docs", "examples"],
+  "engines": { "node": ">=26" },
+  "scripts": { "test": "node --test" }
+}
