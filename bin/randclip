@@ -1,0 +1,103 @@
+#!/usr/bin/env node
+'use strict';
+
+const { parseArgs } = require('node:util');
+const fs = require('node:fs');
+const path = require('node:path');
+const { fetchClips } = require('../src/index.js');
+const { DEFAULTS, LIMITS } = require('../src/model.js');
+const pkg = require('../package.json');
+
+const HELP = `randclip ${pkg.version}
+Download random segments of YouTube videos.
+
+Usage:
+  randclip [options] <url>...
+  randclip [options] --search "<query>"
+  randclip [options] --file links.txt
+
+Options:
+  -q, --search <text>   pick random videos from the search results for <text>
+  -c, --count <n>       videos to take from the search (default ${DEFAULTS.count}, ${LIMITS.count[0]}-${LIMITS.count[1]})
+  -f, --file <path>     file with one URL per line (# starts a comment)
+  -n, --per <n>         segments per video (default ${DEFAULTS.per}, ${LIMITS.per[0]}-${LIMITS.per[1]})
+  -l, --len <seconds>   segment length (default ${DEFAULTS.len}, ${LIMITS.len[0]}-${LIMITS.len[1]})
+  -H, --height <px>     maximum video height (default ${DEFAULTS.height}, ${LIMITS.height[0]}-${LIMITS.height[1]})
+  -o, --out <dir>       output directory (default ./clips)
+      --json            print one JSON event per line instead of text
+  -h, --help            show this help
+  -v, --version         show the version
+
+Segments are saved as H.264 mp4 without audio. Requires yt-dlp, ffmpeg and ffprobe on PATH.
+Use it only on videos you have the right to use.
+`;
+
+const OPTIONS = {
+  search: { type: 'string', short: 'q' }, count: { type: 'string', short: 'c' },
+  file: { type: 'string', short: 'f' }, per: { type: 'string', short: 'n' },
+  len: { type: 'string', short: 'l' }, height: { type: 'string', short: 'H' },
+  out: { type: 'string', short: 'o' }, json: { type: 'boolean' },
+  help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
+};
+
+function usageError(message) {
+  process.stderr.write(`randclip: ${message}\nTry "randclip --help".\n`);
+  process.exit(2);
+}
+
+let parsed;
+try {
+  parsed = parseArgs({ args: process.argv.slice(2), options: OPTIONS, allowPositionals: true });
+} catch (err) {
+  usageError(err.message);
+}
+const { values, positionals } = parsed;
+
+if (values.help) { process.stdout.write(HELP); process.exit(0); }
+if (values.version) { process.stdout.write(pkg.version + '\n'); process.exit(0); }
+
+let text = '';
+if (values.file) {
+  try { text = fs.readFileSync(values.file, 'utf8'); } catch (err) { usageError(`cannot read ${values.file}: ${err.message}`); }
+}
+if (!positionals.length && !values.search && !text) {
+  process.stderr.write(HELP);
+  process.exit(2);
+}
+
+const input = {
+  urls: positionals, text, query: values.search, count: values.count,
+  per: values.per, len: values.len, height: values.height, out: values.out,
+};
+
+const json = !!values.json;
+const out = line => process.stdout.write(line + '\n');
+const note = line => process.stderr.write(line + '\n');
+
+function show(ev) {
+  if (json) return out(JSON.stringify(ev));
+  if (ev.type === 'search') out(`Search "${ev.query}": picked ${ev.picked} of ${ev.found} videos`);
+  else if (ev.type === 'video') out(`[${ev.index}/${ev.total}] ${ev.url} (${ev.duration} s)`);
+  else if (ev.type === 'skip') note(`[${ev.index}/${ev.total}] skipped ${ev.url}: ${ev.reason}`);
+  else if (ev.type === 'clip') out(`  ${ev.file}`);
+  else if (ev.type === 'warn') note(`  warning: ${ev.message}`);
+}
+
+const ctrl = new AbortController();
+process.on('SIGINT', () => ctrl.abort());
+process.on('SIGTERM', () => ctrl.abort());
+
+fetchClips(input, { onEvent: show, signal: ctrl.signal }).then(res => {
+  if (json) out(JSON.stringify({ type: 'done', dir: res.dir, files: res.files.length }));
+  else out(`\nDone: ${res.files.length} clips in ${path.relative(process.cwd(), res.dir) || '.'}`);
+}, err => {
+  if (err && err.code === 'aborted') {
+    if (json) out(JSON.stringify({ type: 'canceled' })); else note('Canceled.');
+    process.exit(130);
+  }
+  const code = (err && err.code) || 'error';
+  const message = (err && err.message) || String(err);
+  if (json) out(JSON.stringify({ type: 'error', code, message }));
+  else note(`randclip: ${message}`);
+  process.exit(err && err.name === 'InputError' ? 2 : 1);
+});
