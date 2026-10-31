@@ -33,10 +33,16 @@ randclip has no npm dependencies and needs no configuration, accounts or API key
 
 ## Install
 
-From a clone of this repository:
+Straight from GitHub, with no clone:
 
 ```sh
-git clone <repository-url> randclip && cd randclip
+npm install --global github:morizmatik/randclip
+```
+
+Or from a clone:
+
+```sh
+git clone https://github.com/morizmatik/randclip.git && cd randclip
 npm install --global .
 ```
 
