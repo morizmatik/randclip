@@ -31,12 +31,14 @@ A video was skipped (unavailable, private, live, no duration).
 A segment was written.
 
 ```json
-{"type":"clip","index":1,"total":3,"file":"VIDEO_ID_21.37-25.37.mp4","path":"/abs/clips/VIDEO_ID_21.37-25.37.mp4","url":"https://www.youtube.com/watch?v=VIDEO_ID","id":"VIDEO_ID","start":21.37,"end":25.37}
+{"type":"clip","index":1,"total":3,"file":"VIDEO_ID_21.37-25.37.mp4","path":"/abs/clips/VIDEO_ID_21.37-25.37.mp4","url":"https://www.youtube.com/watch?v=VIDEO_ID","id":"VIDEO_ID","start":21.37,"end":25.37,"audio":false}
 ```
+
+`audio` is `true` when the file carries sound (only with `--audio`, and only if the video has an audio track).
 
 ## `warn`
 
-One segment failed; the run continues.
+One segment failed or was saved with a limitation (for example, no audio track although `--audio` was given); the run continues.
 
 ```json
 {"type":"warn","index":1,"url":"https://www.youtube.com/watch?v=VIDEO_ID","message":"Segment 21.37-25.37 s was not downloaded: ERROR: timed out"}

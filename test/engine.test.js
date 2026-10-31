@@ -31,8 +31,9 @@ function fakeExec(videos, log = []) {
       return { code: 0, stdout: '', stderr: '' };
     }
     if (cmd === 'ffprobe') {
-      const v = Object.values(videos).find(x => x.codec);
-      return { code: 0, stdout: (v && v.codec) || 'h264,yuv420p', stderr: '' };
+      const v = Object.values(videos).find(x => x.codec || x.acodec !== undefined) || {};
+      if (args.includes('a:0')) return { code: 0, stdout: v.acodec === undefined ? 'aac' : v.acodec, stderr: '' };
+      return { code: 0, stdout: v.codec || 'h264,yuv420p', stderr: '' };
     }
     if (cmd === 'ffmpeg') {
       fs.writeFileSync(args[args.length - 1], 'out');
@@ -180,4 +181,55 @@ test('exec runs a real process, reports a failing one, and kills one on abort', 
   setTimeout(() => ctrl.abort(), 100);
   await assert.rejects(pending, { code: 'aborted' });
   assert.ok(Date.now() - started < 5000, 'the process was killed');
+});
+
+test('audio: AAC is copied together with the video, formats ask for audio', async () => {
+  const log = [];
+  const events = [];
+  await fetchClips(
+    { urls: ['https://youtu.be/aud'], per: 1, audio: true, out: tmp() },
+    { onEvent: e => events.push(e), deps: { exec: fakeExec({ 'https://youtu.be/aud': { id: 'aud', duration: 30 } }, log), checkTools: allTools } },
+  );
+  const dl = log.find(a => a[0] === 'yt-dlp' && a.includes('--download-sections'));
+  assert.match(dl[dl.indexOf('-f') + 1], /\+ba/);
+  const enc = log.find(a => a[0] === 'ffmpeg');
+  assert.ok(!enc.includes('-an'), 'sound is kept');
+  assert.equal(enc[enc.indexOf('-c:a') + 1], 'copy');
+  assert.ok(enc.includes('-map') && enc.includes('0:a:0'));
+  assert.equal(events.find(e => e.type === 'clip').audio, true);
+});
+
+test('audio: other sound codecs become AAC', async () => {
+  const log = [];
+  await fetchClips(
+    { urls: ['https://youtu.be/opus'], per: 1, audio: true, out: tmp() },
+    { deps: { exec: fakeExec({ 'https://youtu.be/opus': { id: 'opus', duration: 30, codec: 'vp9,yuv420p', acodec: 'opus' } }, log), checkTools: allTools } },
+  );
+  const enc = log.find(a => a[0] === 'ffmpeg');
+  assert.equal(enc[enc.indexOf('-c:a') + 1], 'aac');
+  assert.ok(enc.includes('libx264'));
+});
+
+test('audio: a source without sound is saved silent with a warning', async () => {
+  const log = [];
+  const events = [];
+  await fetchClips(
+    { urls: ['https://youtu.be/mute'], per: 1, audio: true, out: tmp() },
+    { onEvent: e => events.push(e), deps: { exec: fakeExec({ 'https://youtu.be/mute': { id: 'mute', duration: 30, acodec: '' } }, log), checkTools: allTools } },
+  );
+  assert.ok(log.find(a => a[0] === 'ffmpeg').includes('-an'));
+  assert.match(events.find(e => e.type === 'warn').message, /no audio track/);
+  assert.equal(events.find(e => e.type === 'clip').audio, false);
+});
+
+test('without audio the format has no audio part and sound is dropped', async () => {
+  const log = [];
+  await fetchClips(
+    { urls: ['https://youtu.be/q'], per: 1, out: tmp() },
+    { deps: { exec: fakeExec({ 'https://youtu.be/q': { id: 'q', duration: 30 } }, log), checkTools: allTools } },
+  );
+  const dl = log.find(a => a[0] === 'yt-dlp' && a.includes('--download-sections'));
+  assert.doesNotMatch(dl[dl.indexOf('-f') + 1], /\+ba/);
+  assert.ok(log.find(a => a[0] === 'ffmpeg').includes('-an'));
+  assert.ok(!log.some(a => a[0] === 'ffprobe' && a.includes('a:0')), 'sound is not probed');
 });

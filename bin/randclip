@@ -24,11 +24,12 @@ Options:
   -l, --len <seconds>   segment length (default ${DEFAULTS.len}, ${LIMITS.len[0]}-${LIMITS.len[1]})
   -H, --height <px>     maximum video height (default ${DEFAULTS.height}, ${LIMITS.height[0]}-${LIMITS.height[1]})
   -o, --out <dir>       output directory (default ./clips)
+      --audio           keep the sound (AAC); by default clips are silent
       --json            print one JSON event per line instead of text
   -h, --help            show this help
   -v, --version         show the version
 
-Segments are saved as H.264 mp4 without audio. Requires yt-dlp, ffmpeg and ffprobe on PATH.
+Segments are saved as H.264 mp4, without audio unless --audio is given. Requires yt-dlp, ffmpeg and ffprobe on PATH.
 Use it only on videos you have the right to use.
 `;
 
@@ -36,7 +37,7 @@ const OPTIONS = {
   search: { type: 'string', short: 'q' }, count: { type: 'string', short: 'c' },
   file: { type: 'string', short: 'f' }, per: { type: 'string', short: 'n' },
   len: { type: 'string', short: 'l' }, height: { type: 'string', short: 'H' },
-  out: { type: 'string', short: 'o' }, json: { type: 'boolean' },
+  out: { type: 'string', short: 'o' }, audio: { type: 'boolean' }, json: { type: 'boolean' },
   help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
 };
 
@@ -67,7 +68,7 @@ if (!positionals.length && !values.search && !text) {
 
 const input = {
   urls: positionals, text, query: values.search, count: values.count,
-  per: values.per, len: values.len, height: values.height, out: values.out,
+  per: values.per, len: values.len, height: values.height, out: values.out, audio: !!values.audio,
 };
 
 const json = !!values.json;

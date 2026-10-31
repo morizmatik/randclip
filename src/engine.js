@@ -93,11 +93,16 @@ function lastLine(text) {
 }
 
 // Prefer H.264 in mp4 so the segment can be cut by byte range and copied without re-encoding.
-function formatSelector(height) {
-  return `bv*[height<=${height}][vcodec^=avc1][ext=mp4]/bv*[height<=${height}][vcodec^=avc1]/bv*[height<=${height}]`;
+// With audio, AAC in m4a goes with it, so the pieces fit into one mp4 without re-encoding the sound.
+function formatSelector(height, audio = false) {
+  if (!audio) {
+    return `bv*[height<=${height}][vcodec^=avc1][ext=mp4]/bv*[height<=${height}][vcodec^=avc1]/bv*[height<=${height}]`;
+  }
+  return `bv*[height<=${height}][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height<=${height}][vcodec^=avc1]+ba[ext=m4a]`
+    + `/bv*[height<=${height}]+ba/b[height<=${height}]`;
 }
 
-// Downloads random segments (silent H.264 mp4) of the given videos or of a random sample of search results.
+// Downloads random segments (H.264 mp4, silent unless `audio` is set) of the given videos or of a random sample of search results.
 //   input: see parseInput, plus `out` (directory, default ./clips)
 //   hooks: { onEvent(event), signal, deps }  (deps is for tests: { exec, checkTools, random })
 // Events: search, video, skip, clip, warn. Resolves { dir, files, clips }.
@@ -155,7 +160,7 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
         // which often times out on YouTube. The native downloader fetches just the needed byte range.
         const dl = await step('yt-dlp', [
           '--no-playlist', '-q', '--no-warnings', '--downloader', 'native',
-          '-f', formatSelector(opts.height), '--download-sections', `*${start}-${end}`,
+          '-f', formatSelector(opts.height, opts.audio), '--download-sections', `*${start}-${end}`,
           '-o', path.join(work, `${stem}.%(ext)s`), url,
         ]);
         const src = dl.code === 0 ? fs.readdirSync(work).find(f => f.startsWith(stem + '.')) : null;
@@ -174,14 +179,31 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
         const video = copy
           ? ['-c:v', 'copy']
           : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p'];
-        const enc = await step('ffmpeg', ['-v', 'error', '-y', '-i', srcPath, '-an', ...video, '-movflags', '+faststart', target]);
+
+        // Sound: AAC is copied, anything else becomes AAC; a source without sound stays silent (with a warning).
+        let sound = ['-an'];
+        let withAudio = false;
+        if (opts.audio) {
+          const aprobe = await step('ffprobe', [
+            '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', srcPath,
+          ]);
+          const acodec = aprobe.code === 0 ? aprobe.stdout.trim() : '';
+          if (acodec) {
+            sound = acodec === 'aac' ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k'];
+            withAudio = true;
+          } else {
+            emit({ type: 'warn', index, url, message: `Segment ${start}-${end} s has no audio track; saved without sound` });
+          }
+        }
+        const maps = withAudio ? ['-map', '0:v:0', '-map', '0:a:0'] : [];
+        const enc = await step('ffmpeg', ['-v', 'error', '-y', '-i', srcPath, ...maps, ...video, ...sound, '-movflags', '+faststart', target]);
         fs.rmSync(srcPath, { force: true });
         if (enc.code !== 0) {
           fs.rmSync(target, { force: true });
           emit({ type: 'warn', index, url, message: `ffmpeg failed for segment ${start}-${end} s: ${lastLine(enc.stderr)}` });
           continue;
         }
-        const clip = { file, path: target, url, id, start, end };
+        const clip = { file, path: target, url, id, start, end, audio: withAudio };
         files.push(file);
         clips.push(clip);
         emit({ type: 'clip', index, total, ...clip });

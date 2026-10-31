@@ -21,6 +21,7 @@ Downloads random segments and writes them to the output directory.
 | `per` | integer | 3 | Segments per video |
 | `len` | integer | 4 | Segment length, seconds |
 | `height` | integer | 1080 | Maximum video height |
+| `audio` | boolean | `false` | Keep the sound (AAC) in the clips |
 | `out` | `string` | `./clips` | Output directory |
 
 `hooks`:
@@ -30,7 +31,7 @@ Downloads random segments and writes them to the output directory.
 | `onEvent(event)` | Called for each progress event, see [events](events.md) |
 | `signal` | An `AbortSignal`; aborting stops running processes and rejects with `code: 'aborted'` |
 
-Result: `dir` is the absolute output directory; `files` are the file names written by this call; `clips` has one object per file: `{ file, path, url, id, start, end }`.
+Result: `dir` is the absolute output directory; `files` are the file names written by this call; `clips` has one object per file: `{ file, path, url, id, start, end, audio }` (`audio` tells whether the file has sound).
 
 Errors carry a `code`:
 
@@ -46,7 +47,7 @@ Errors carry a `code`:
 
 Runs each tool and reports whether it works. `missing` lists the names that do not; `hint` is an install command for the current system (empty when nothing is missing).
 
-## `parseInput(input) → { mode, urls, query, per, len, height, count }`
+## `parseInput(input) → { mode, urls, query, per, len, height, count, audio }`
 
 Validates and normalizes an input object the same way `fetchClips` does. Throws `InputError`. `DEFAULTS` and `LIMITS` expose the default values and ranges; `parseList(text)` splits a list of lines.
 

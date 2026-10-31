@@ -51,14 +51,15 @@ function intIn(value, name, range, fallback) {
   return n;
 }
 
-// input: { urls?: string[], text?: string, query?: string, per?, len?, height?, count? }
-// returns { mode: 'links' | 'search', urls, query, per, len, height, count }
+// input: { urls?: string[], text?: string, query?: string, per?, len?, height?, count?, audio? }
+// returns { mode: 'links' | 'search', urls, query, per, len, height, count, audio }
 function parseInput(input) {
   const opts = input || {};
   const per = intIn(opts.per, 'per', LIMITS.per, DEFAULTS.per);
   const len = intIn(opts.len, 'len', LIMITS.len, DEFAULTS.len);
   const height = intIn(opts.height, 'height', LIMITS.height, DEFAULTS.height);
   const count = intIn(opts.count, 'count', LIMITS.count, DEFAULTS.count);
+  const audio = opts.audio === true || opts.audio === 'true';
 
   const text = String(opts.text == null ? '' : opts.text);
   if (text.length > LIMITS.text) throw new InputError('long');
@@ -69,7 +70,7 @@ function parseInput(input) {
   if (query && lines.length) throw new InputError('conflict');
   if (query) {
     if (query.length > LIMITS.query) throw new InputError('queryLong');
-    return { mode: 'search', urls: [], query, per, len, height, count };
+    return { mode: 'search', urls: [], query, per, len, height, count, audio };
   }
   if (!lines.length) throw new InputError('empty');
   const urls = lines.map(toUrl);
@@ -77,7 +78,7 @@ function parseInput(input) {
   for (const u of urls) {
     if (!isUrl(u)) throw new InputError('notUrl', `Not a URL: ${u.slice(0, 80)}`);
   }
-  return { mode: 'links', urls, query: '', per, len, height, count };
+  return { mode: 'links', urls, query: '', per, len, height, count, audio };
 }
 
 module.exports = { DEFAULTS, LIMITS, InputError, parseList, toUrl, isUrl, parseInput };

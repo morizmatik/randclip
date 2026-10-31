@@ -53,3 +53,9 @@ test('numbers may be given as strings (command line)', () => {
   const r = parseInput({ urls: ['https://a.example'], per: '2', len: '5', height: '720' });
   assert.deepEqual([r.per, r.len, r.height], [2, 5, 720]);
 });
+
+test('audio is off by default and on only when asked', () => {
+  assert.equal(parseInput({ urls: ['https://a.example'] }).audio, false);
+  assert.equal(parseInput({ urls: ['https://a.example'], audio: true }).audio, true);
+  assert.equal(parseInput({ query: 'x', audio: true }).audio, true);
+});

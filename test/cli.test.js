@@ -14,6 +14,7 @@ test('--help prints usage and exits 0', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /Usage:/);
   assert.match(r.stdout, /--search/);
+  assert.match(r.stdout, /--audio/);
 });
 
 test('--version prints the package version', () => {

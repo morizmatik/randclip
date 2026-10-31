@@ -5,7 +5,7 @@
 
 Download random segments of YouTube videos – for sampling, video editing, datasets, references, or anything else that needs many short clips.
 
-Give it a few links, or a search query, and it saves several random, non-overlapping segments from each video as H.264 `.mp4` files. It is a thin, dependency-free layer over [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ffmpeg](https://ffmpeg.org/), usable as a command-line tool or as a Node.js library.
+Give it a few links, or a search query, and it saves several random, non-overlapping segments from each video as H.264 `.mp4` files – silent by default, or with the sound (`--audio`). It is a thin, dependency-free layer over [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ffmpeg](https://ffmpeg.org/), usable as a command-line tool or as a Node.js library.
 
 ```console
 $ randclip https://www.youtube.com/watch?v=VIDEO_ID --per 3 --len 4
@@ -59,6 +59,9 @@ randclip --search "skate clips" --count 6 --per 5 --len 2
 
 # A list of links in a file (one per line, # starts a comment)
 randclip --file links.txt --out ./samples
+
+# Keep the sound
+randclip --audio --per 2 --len 5 "https://youtu.be/VIDEO_ID"
 ```
 
 Quote URLs: `&` and `?` mean something to most shells. A URL without a scheme (`youtu.be/ID`) is accepted.
@@ -74,13 +77,14 @@ Quote URLs: `&` and `?` mean something to most shells. A URL without a scheme (`
 | `-l, --len <seconds>` | 4 | Segment length (1–30) |
 | `-H, --height <px>` | 1080 | Maximum video height (240–2160) |
 | `-o, --out <dir>` | `./clips` | Output directory, created if needed |
+| `--audio` | off | Keep the sound (AAC); without it, clips are silent |
 | `--json` | – | Print one JSON event per line (see [events](docs/events.md)) |
 
 Exit codes: `0` success, `1` the run failed (missing tools, nothing downloaded), `2` invalid usage, `130` canceled with Ctrl+C. More in [docs/cli.md](docs/cli.md).
 
 ### Output
 
-Segments are written as `<video id>_<start>-<end>.mp4`, for example `VIDEO_ID_21.37-25.37.mp4` (start and end in seconds). They are H.264, **without audio**, so they can be dropped straight into most editors and samplers. Segments of one video never overlap. A video shorter than the segment length is saved whole.
+Segments are written as `<video id>_<start>-<end>.mp4`, for example `VIDEO_ID_21.37-25.37.mp4` (start and end in seconds). They are H.264 and **silent by default**, so they can be dropped straight into most editors. With `--audio` the clip also carries the sound, as AAC: copied when the source is already AAC, converted otherwise. If a video has no audio track, that clip is saved silent and a warning is printed. Segments of one video never overlap. A video shorter than the segment length is saved whole.
 
 ## Use as a library
 
@@ -88,7 +92,7 @@ Segments are written as `<video id>_<start>-<end>.mp4`, for example `VIDEO_ID_21
 const { fetchClips } = require('randclip');
 
 const { dir, files, clips } = await fetchClips(
-  { urls: ['https://youtu.be/VIDEO_ID'], per: 3, len: 4, out: './clips' },
+  { urls: ['https://youtu.be/VIDEO_ID'], per: 3, len: 4, audio: false, out: './clips' },
   { onEvent: event => console.log(event.type) },
 );
 ```
