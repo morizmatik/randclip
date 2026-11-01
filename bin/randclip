@@ -80,6 +80,7 @@ function show(ev) {
   if (ev.type === 'search') out(`Search "${ev.query}": picked ${ev.picked} of ${ev.found} videos`);
   else if (ev.type === 'video') out(`[${ev.index}/${ev.total}] ${ev.url} (${ev.duration} s)`);
   else if (ev.type === 'skip') note(`[${ev.index}/${ev.total}] skipped ${ev.url}: ${ev.reason}`);
+  else if (ev.type === 'retry') note(`  retrying segment ${ev.part} (try ${ev.attempt} of ${ev.attempts}): ${ev.message}`);
   else if (ev.type === 'clip') out(`  ${ev.file}`);
   else if (ev.type === 'warn') note(`  warning: ${ev.message}`);
 }

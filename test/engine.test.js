@@ -18,7 +18,7 @@ function fakeExec(videos, log = []) {
     if (cmd === 'yt-dlp' && args.includes('--skip-download')) {
       const v = videos[url];
       if (!v) return { code: 1, stdout: '', stderr: 'ERROR: Video unavailable\n' };
-      return { code: 0, stdout: `${v.id} ${v.duration}\n`, stderr: '' };
+      return { code: 0, stdout: `${v.id} ${v.duration}${v.title ? ' ' + v.title : ''}\n`, stderr: '' };
     }
     if (cmd === 'yt-dlp' && args[0] === '--flat-playlist') {
       return { code: 0, stdout: Object.keys(videos).join('\n') + '\n', stderr: '' };
@@ -83,7 +83,7 @@ test('unavailable videos are skipped, failed segments produce a warning', async 
   };
   const res = await fetchClips(
     { urls: ['https://youtu.be/gone', 'https://youtu.be/bad', 'https://youtu.be/ok'], per: 1, out },
-    { onEvent: e => events.push(e), deps: { exec: fakeExec(videos), checkTools: allTools } },
+    { onEvent: e => events.push(e), deps: { exec: fakeExec(videos), checkTools: allTools, sleep: async () => {} } },
   );
   assert.equal(res.files.length, 1);
   assert.equal(events.filter(e => e.type === 'skip').length, 1);
@@ -232,4 +232,62 @@ test('without audio the format has no audio part and sound is dropped', async ()
   assert.doesNotMatch(dl[dl.indexOf('-f') + 1], /\+ba/);
   assert.ok(log.find(a => a[0] === 'ffmpeg').includes('-an'));
   assert.ok(!log.some(a => a[0] === 'ffprobe' && a.includes('a:0')), 'sound is not probed');
+});
+
+test('a segment that fails once is retried, and progress events come in order', async () => {
+  const out = tmp();
+  const events = [];
+  const inner = fakeExec({ 'https://youtu.be/flaky': { id: 'flaky', duration: 30 } });
+  let downloads = 0;
+  const exec = async (cmd, args, o) => {
+    if (cmd === 'yt-dlp' && args.includes('--download-sections') && ++downloads === 1) {
+      return { code: 1, stdout: '', stderr: 'ERROR: ffmpeg exited with code 196\n' };
+    }
+    return inner(cmd, args, o);
+  };
+  const res = await fetchClips(
+    { urls: ['https://youtu.be/flaky'], per: 1, out },
+    { onEvent: e => events.push(e), deps: { exec, checkTools: allTools, sleep: async () => {} } },
+  );
+  assert.equal(res.files.length, 1);
+  assert.deepEqual(events.map(e => e.type), ['video', 'segment', 'retry', 'clip']);
+  assert.equal(events[1].parts, 1);
+  assert.match(events[2].message, /196/);
+  assert.equal(events[2].attempt, 2);
+  assert.equal(events.filter(e => e.type === 'warn').length, 0);
+});
+
+test('a segment that keeps failing is tried three times, then warned about', async () => {
+  const out = tmp();
+  const events = [];
+  const videos = { 'https://youtu.be/bad': { id: 'bad', duration: 30, failDownload: true }, 'https://youtu.be/ok': { id: 'ok', duration: 30 } };
+  await fetchClips(
+    { urls: ['https://youtu.be/bad', 'https://youtu.be/ok'], per: 1, out },
+    { onEvent: e => events.push(e), deps: { exec: fakeExec(videos), checkTools: allTools, sleep: async () => {} } },
+  );
+  assert.equal(events.filter(e => e.type === 'retry').length, 2);
+  assert.equal(events.filter(e => e.type === 'warn').length, 1);
+});
+
+test('clips are named after the video title and the time range', async () => {
+  const out = tmp();
+  const events = [];
+  const res = await fetchClips(
+    { urls: ['https://youtu.be/t'], per: 1, len: 3, out },
+    { onEvent: e => events.push(e), deps: { exec: fakeExec({ 'https://youtu.be/t': { id: 't', duration: 3000, title: 'Soul: Train/1974 [live]' } }), checkTools: allTools, random: () => 0.5 } },
+  );
+  assert.match(res.files[0], /^Soul Train 1974 live \[t\] \d+m\d\ds-\d+m\d\ds\.mp4$/);
+  assert.ok(fs.existsSync(path.join(out, res.files[0])));
+  assert.equal(events.find(e => e.type === 'video').title, 'Soul Train 1974 live');
+  assert.equal(events.find(e => e.type === 'clip').title, 'Soul Train 1974 live');
+});
+
+test('clipFileName: time formats, long titles, missing title', () => {
+  const { clipFileName } = require('../src/engine');
+  assert.equal(clipFileName({ title: 'A', id: 'x', start: 1226.25, end: 1229.25 }), 'A [x] 20m26s-20m29s.mp4');
+  assert.equal(clipFileName({ title: 'A', id: 'x', start: 3723, end: 3726 }), 'A [x] 1h02m03s-1h02m06s.mp4');
+  assert.equal(clipFileName({ title: 'A', id: 'x', start: 5, end: 9 }), 'A [x] 5s-9s.mp4');
+  assert.equal(clipFileName({ title: '', id: 'x', start: 1.5, end: 5.5 }), 'x_1.5-5.5.mp4');
+  assert.equal(clipFileName({ title: 'NA', id: 'x', start: 1, end: 5 }), 'x_1-5.mp4');
+  assert.ok(clipFileName({ title: 'z'.repeat(300), id: 'x', start: 1, end: 5 }).length < 110);
 });

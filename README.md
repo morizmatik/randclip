@@ -10,9 +10,9 @@ Give it a few links, or a search query, and it saves several random, non-overlap
 ```console
 $ randclip https://www.youtube.com/watch?v=VIDEO_ID --per 3 --len 4
 [1/1] https://www.youtube.com/watch?v=VIDEO_ID (195 s)
-  VIDEO_ID_21.37-25.37.mp4
-  VIDEO_ID_88.02-92.02.mp4
-  VIDEO_ID_153.4-157.4.mp4
+  Soul Train 1974 [VIDEO_ID] 0m21s-0m25s.mp4
+  Soul Train 1974 [VIDEO_ID] 1m28s-1m32s.mp4
+  Soul Train 1974 [VIDEO_ID] 2m33s-2m37s.mp4
 
 Done: 3 clips in clips
 ```
@@ -84,7 +84,7 @@ Exit codes: `0` success, `1` the run failed (missing tools, nothing downloaded),
 
 ### Output
 
-Segments are written as `<video id>_<start>-<end>.mp4`, for example `VIDEO_ID_21.37-25.37.mp4` (start and end in seconds). They are H.264 and **silent by default**, so they can be dropped straight into most editors. With `--audio` the clip also carries the sound, as AAC: copied when the source is already AAC, converted otherwise. If a video has no audio track, that clip is saved silent and a warning is printed. Segments of one video never overlap. A video shorter than the segment length is saved whole.
+Segments are written as `<title> [<video id>] <start>-<end>.mp4`, for example `Soul Train 1974 [VIDEO_ID] 20m26s-20m29s.mp4` (title cleaned for file names and cut to 80 characters; times in whole seconds). If the title is unavailable the name is `<video id>_<start>-<end>.mp4` (start and end in seconds). They are H.264 and **silent by default**, so they can be dropped straight into most editors. With `--audio` the clip also carries the sound, as AAC: copied when the source is already AAC, converted otherwise. If a video has no audio track, that clip is saved silent and a warning is printed. Segments of one video never overlap. A video shorter than the segment length is saved whole.
 
 ## Use as a library
 

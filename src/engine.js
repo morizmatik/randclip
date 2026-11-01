@@ -7,6 +7,7 @@ const path = require('node:path');
 const { parseInput } = require('./model');
 const { pickSections } = require('./sections');
 
+const SEGMENT_TRIES = 3;
 const TOOLS = [['yt-dlp', '--version'], ['ffmpeg', '-version'], ['ffprobe', '-version']];
 
 function codedError(code, message, extra) {
@@ -88,6 +89,33 @@ function shuffle(list, rng) {
   return a;
 }
 
+// Makes a video title safe to use in a file name on macOS, Windows and Linux, and short enough to read.
+function cleanTitle(title, max = 80) {
+  const t = String(title || '')
+    .replace(/[\u0000-\u001f\u007f\\/:*?"<>|\[\]]/g, ' ')
+    .replace(/\s+/g, ' ').trim()
+    .replace(/^\.+/, '').slice(0, max).trim();
+  return t.toLowerCase() === 'na' ? '' : t;
+}
+
+// 26.4 -> "26s", 1226.25 -> "20m26s", 3723 -> "1h02m03s" (whole seconds, rounded down).
+function clockName(seconds) {
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h) return `${h}h${String(m).padStart(2, '0')}m${String(r).padStart(2, '0')}s`;
+  if (m) return `${m}m${String(r).padStart(2, '0')}s`;
+  return `${r}s`;
+}
+
+// `Title [id] 20m26s-20m29s.mp4`, or `id_start-end.mp4` when the title is unknown.
+function clipFileName({ title, id, start, end }) {
+  const t = cleanTitle(title);
+  if (!t) return `${id}_${start}-${end}.mp4`;
+  return `${t} [${id}] ${clockName(start)}-${clockName(end)}.mp4`;
+}
+
 function lastLine(text) {
   return String(text || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
 }
@@ -105,12 +133,13 @@ function formatSelector(height, audio = false) {
 // Downloads random segments (H.264 mp4, silent unless `audio` is set) of the given videos or of a random sample of search results.
 //   input: see parseInput, plus `out` (directory, default ./clips)
 //   hooks: { onEvent(event), signal, deps }  (deps is for tests: { exec, checkTools, random })
-// Events: search, video, skip, clip, warn. Resolves { dir, files, clips }.
+// Events: search, video, skip, segment, retry, clip, warn. Resolves { dir, files, clips }.
 async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
   const opts = parseInput(input);
   const emit = typeof onEvent === 'function' ? onEvent : () => {};
   const run = deps.exec || exec;
   const rng = deps.random || Math.random;
+  const sleep = deps.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
 
   const tools = (deps.checkTools || checkTools)();
   if (tools.missing.length) {
@@ -140,9 +169,10 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
       const index = v + 1;
       const total = urls.length;
 
-      const info = await step('yt-dlp', ['--no-playlist', '--skip-download', '--print', '%(id)s %(duration)s', url]);
+      const info = await step('yt-dlp', ['--no-playlist', '--skip-download', '--print', '%(id)s %(duration)s %(title)s', url]);
       const line = info.stdout.split(/\r?\n/).find(Boolean) || '';
-      const [rawId, rawDuration] = line.trim().split(/\s+/);
+      const [, rawId, rawDuration, rawTitle = ''] = line.trim().match(/^(\S+)\s+(\S+)\s*(.*)$/) || [];
+      const title = cleanTitle(rawTitle);
       const duration = Math.floor(parseFloat(rawDuration));
       if (info.code !== 0 || !rawId || !(duration > 0)) {
         const reason = info.code !== 0 ? (lastLine(info.stderr) || 'unavailable') : 'no duration (live stream or unavailable)';
@@ -150,20 +180,31 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
         continue;
       }
       const id = rawId.replace(/[^\w-]/g, '_');
-      emit({ type: 'video', index, total, url, id, duration });
+      emit({ type: 'video', index, total, url, id, duration, title });
 
       const sections = pickSections(duration, opts.per, opts.len, rng);
       for (let k = 0; k < sections.length; k++) {
         const { start, end } = sections[k];
         const stem = `s${index}-${k + 1}`;
+        emit({ type: 'segment', index, total, part: k + 1, parts: sections.length, start, end });
         // --downloader native: with --download-sections yt-dlp otherwise hands the job to ffmpeg,
         // which often times out on YouTube. The native downloader fetches just the needed byte range.
-        const dl = await step('yt-dlp', [
-          '--no-playlist', '-q', '--no-warnings', '--downloader', 'native',
-          '-f', formatSelector(opts.height, opts.audio), '--download-sections', `*${start}-${end}`,
-          '-o', path.join(work, `${stem}.%(ext)s`), url,
-        ]);
-        const src = dl.code === 0 ? fs.readdirSync(work).find(f => f.startsWith(stem + '.')) : null;
+        // Even so, a segment sometimes fails for a moment (ffmpeg exit 196 on a dropped connection),
+        // so each one gets a few tries.
+        let dl;
+        let src = null;
+        for (let attempt = 1; attempt <= SEGMENT_TRIES; attempt++) {
+          for (const f of fs.readdirSync(work)) if (f.startsWith(stem + '.')) fs.rmSync(path.join(work, f), { force: true });
+          dl = await step('yt-dlp', [
+            '--no-playlist', '-q', '--no-warnings', '--downloader', 'native',
+            '-f', formatSelector(opts.height, opts.audio), '--download-sections', `*${start}-${end}`,
+            '-o', path.join(work, `${stem}.%(ext)s`), url,
+          ]);
+          src = dl.code === 0 ? fs.readdirSync(work).find(f => f.startsWith(stem + '.')) : null;
+          if (src || attempt === SEGMENT_TRIES) break;
+          emit({ type: 'retry', index, part: k + 1, attempt: attempt + 1, attempts: SEGMENT_TRIES, message: lastLine(dl.stderr) });
+          await sleep(1500 * attempt);
+        }
         if (!src) {
           emit({ type: 'warn', index, url, message: `Segment ${start}-${end} s was not downloaded${dl.code ? ': ' + lastLine(dl.stderr) : ''}` });
           continue;
@@ -174,7 +215,9 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
           '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,pix_fmt', '-of', 'csv=p=0', srcPath,
         ]);
         const copy = probe.code === 0 && probe.stdout.trim() === 'h264,yuv420p';
-        const file = `${id}_${start}-${end}.mp4`;
+        let file = clipFileName({ title, id, start, end });
+        // Two pieces within the same second would get one name; keep both.
+        for (let n = 2; files.includes(file); n++) file = clipFileName({ title, id, start, end }).replace(/\.mp4$/, ` (${n}).mp4`);
         const target = path.join(outDir, file);
         const video = copy
           ? ['-c:v', 'copy']
@@ -203,7 +246,7 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
           emit({ type: 'warn', index, url, message: `ffmpeg failed for segment ${start}-${end} s: ${lastLine(enc.stderr)}` });
           continue;
         }
-        const clip = { file, path: target, url, id, start, end, audio: withAudio };
+        const clip = { file, path: target, url, id, title, start, end, audio: withAudio };
         files.push(file);
         clips.push(clip);
         emit({ type: 'clip', index, total, ...clip });
@@ -217,4 +260,4 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
   }
 }
 
-module.exports = { fetchClips, checkTools, installHint, exec, formatSelector };
+module.exports = { clipFileName, cleanTitle, fetchClips, checkTools, installHint, exec, formatSelector };
