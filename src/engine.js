@@ -56,7 +56,7 @@ function killTree(child) {
 }
 
 // Runs a command without a shell. Resolves { code, stdout, stderr }; rejects with an AbortError on abort.
-function exec(cmd, args, { signal } = {}) {
+function exec(cmd, args, { signal, onStdout } = {}) {
   return new Promise((resolve, reject) => {
     if (signal && signal.aborted) return reject(abortError());
     const child = spawn(cmd, args, {
@@ -65,7 +65,7 @@ function exec(cmd, args, { signal } = {}) {
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
-    child.stdout.on('data', c => { stdout += c; });
+    child.stdout.on('data', c => { stdout += c; if (onStdout) onStdout(c); });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', c => { stderr = (stderr + c).slice(-4000); });
     const onAbort = () => killTree(child);
@@ -78,6 +78,40 @@ function exec(cmd, args, { signal } = {}) {
       else resolve({ code, stdout, stderr });
     });
   });
+}
+
+// yt-dlp prints one line per update with --progress-template; PROGRESS_TEMPLATE makes them parseable.
+const PROGRESS_PREFIX = 'RC-PROGRESS';
+const PROGRESS_TEMPLATE = `download:${PROGRESS_PREFIX} %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s %(progress.speed)s %(progress.eta)s`;
+const PROGRESS_EVERY_MS = 700;
+
+// One template line -> { downloaded, size, speed, eta } (bytes, bytes, bytes/s, seconds; null when yt-dlp does not know), or null.
+function parseProgress(line) {
+  const m = String(line || '').match(/^RC-PROGRESS\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$/);
+  if (!m) return null;
+  const num = v => { const n = Number(v); return v !== 'NA' && v !== 'None' && Number.isFinite(n) && n >= 0 ? n : null; };
+  const downloaded = num(m[1]);
+  if (downloaded === null) return null;
+  return { downloaded, size: num(m[2]) ?? num(m[3]), speed: num(m[4]), eta: num(m[5]) };
+}
+
+// Turns stdout chunks into whole lines, then into throttled progress callbacks.
+function progressReader(onProgress, { now = Date.now, every = PROGRESS_EVERY_MS } = {}) {
+  let buf = '';
+  let last = -Infinity;
+  return chunk => {
+    buf += chunk;
+    const lines = buf.split(/\r?\n|\r/);
+    buf = lines.pop();
+    for (const line of lines) {
+      const p = parseProgress(line);
+      if (!p) continue;
+      const t = now();
+      if (t - last < every && !(p.size && p.downloaded >= p.size)) continue;
+      last = t;
+      onProgress(p);
+    }
+  };
 }
 
 function shuffle(list, rng) {
@@ -133,7 +167,7 @@ function formatSelector(height, audio = false) {
 // Downloads random segments (H.264 mp4, silent unless `audio` is set) of the given videos or of a random sample of search results.
 //   input: see parseInput, plus `out` (directory, default ./clips)
 //   hooks: { onEvent(event), signal, deps }  (deps is for tests: { exec, checkTools, random })
-// Events: search, video, skip, segment, retry, clip, warn. Resolves { dir, files, clips }.
+// Events: search, video, skip, segment, progress (downloaded, size, speed, eta; bytes and seconds, null if unknown), retry, clip, warn. Resolves { dir, files, clips }.
 async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
   const opts = parseInput(input);
   const emit = typeof onEvent === 'function' ? onEvent : () => {};
@@ -145,7 +179,7 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
   if (tools.missing.length) {
     throw codedError('tools', `Missing required tools: ${tools.missing.join(', ')}. ${tools.hint}`, { missing: tools.missing });
   }
-  const step = (cmd, args) => run(cmd, args, { signal });
+  const step = (cmd, args, extra) => run(cmd, args, { signal, ...extra });
 
   const outDir = path.resolve((input && input.out) || 'clips');
   fs.mkdirSync(outDir, { recursive: true });
@@ -196,10 +230,13 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
         for (let attempt = 1; attempt <= SEGMENT_TRIES; attempt++) {
           for (const f of fs.readdirSync(work)) if (f.startsWith(stem + '.')) fs.rmSync(path.join(work, f), { force: true });
           dl = await step('yt-dlp', [
-            '--no-playlist', '-q', '--no-warnings', '--downloader', 'native',
+            '--no-playlist', '-q', '--no-warnings', '--progress', '--newline', '--progress-template', PROGRESS_TEMPLATE,
+            '--downloader', 'native',
             '-f', formatSelector(opts.height, opts.audio), '--download-sections', `*${start}-${end}`,
             '-o', path.join(work, `${stem}.%(ext)s`), url,
-          ]);
+          ], {
+            onStdout: progressReader(p => emit({ type: 'progress', index, total, part: k + 1, parts: sections.length, start, end, ...p })),
+          });
           src = dl.code === 0 ? fs.readdirSync(work).find(f => f.startsWith(stem + '.')) : null;
           if (src || attempt === SEGMENT_TRIES) break;
           emit({ type: 'retry', index, part: k + 1, attempt: attempt + 1, attempts: SEGMENT_TRIES, message: lastLine(dl.stderr) });
@@ -260,4 +297,4 @@ async function fetchClips(input, { onEvent, signal, deps = {} } = {}) {
   }
 }
 
-module.exports = { clipFileName, cleanTitle, fetchClips, checkTools, installHint, exec, formatSelector };
+module.exports = { clipFileName, cleanTitle, fetchClips, checkTools, installHint, exec, formatSelector, parseProgress, progressReader };

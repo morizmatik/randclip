@@ -291,3 +291,43 @@ test('clipFileName: time formats, long titles, missing title', () => {
   assert.equal(clipFileName({ title: 'NA', id: 'x', start: 1, end: 5 }), 'x_1-5.mp4');
   assert.ok(clipFileName({ title: 'z'.repeat(300), id: 'x', start: 1, end: 5 }).length < 110);
 });
+
+test('parseProgress reads the yt-dlp template line and tolerates unknown values', () => {
+  const { parseProgress } = require('../src/engine');
+  assert.deepEqual(parseProgress('RC-PROGRESS 1000 4000 NA 250000.5 12'), { downloaded: 1000, size: 4000, speed: 250000.5, eta: 12 });
+  assert.deepEqual(parseProgress('RC-PROGRESS 500 NA 2000 NA NA'), { downloaded: 500, size: 2000, speed: null, eta: null });
+  assert.equal(parseProgress('[download] 10%'), null);
+  assert.equal(parseProgress('RC-PROGRESS NA NA NA NA NA'), null);
+});
+
+test('progressReader joins split chunks and throttles updates, but always passes the last one', () => {
+  const { progressReader } = require('../src/engine');
+  const got = [];
+  let t = 0;
+  const feed = progressReader(p => got.push(p), { now: () => t, every: 500 });
+  feed('RC-PROGRESS 100 1000 NA 50 9\nRC-PRO');
+  t = 100; feed('GRESS 200 1000 NA 60 8\n');
+  t = 600; feed('RC-PROGRESS 300 1000 NA 70 7\nRC-PROGRESS 1000 1000 NA 70 0\n');
+  assert.deepEqual(got.map(p => p.downloaded), [100, 300, 1000]);
+});
+
+test('download progress reaches the events with segment numbers', async () => {
+  const out = tmp();
+  const events = [];
+  const inner = fakeExec({ 'https://youtu.be/prog': { id: 'prog', duration: 30 } });
+  const exec = async (cmd, args, o) => {
+    if (cmd === 'yt-dlp' && args.includes('--download-sections')) {
+      assert.ok(args.includes('--progress-template'));
+      o.onStdout('RC-PROGRESS 2048 8192 NA 1024 6\n');
+    }
+    return inner(cmd, args, o);
+  };
+  await fetchClips({ urls: ['https://youtu.be/prog'], per: 1, out }, { onEvent: e => events.push(e), deps: { exec, checkTools: allTools } });
+  const p = events.find(e => e.type === 'progress');
+  assert.equal(p.part, 1);
+  assert.equal(p.parts, 1);
+  assert.equal(p.index, 1);
+  assert.equal(p.total, 1);
+  assert.equal(p.downloaded, 2048);
+  assert.equal(p.speed, 1024);
+});
